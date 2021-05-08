@@ -30,12 +30,16 @@ all() ->
 		{group, https},
 		{group, h2},
 		{group, h2c},
-		{group, h2c_upgrade}
+		{group, h2c_upgrade},
+		{group, proxy_tests}
 	].
 
 groups() ->
-	Tests = ct_helper:all(?MODULE),
-	[{h2c_upgrade, [parallel], Tests}|cowboy_test:common_groups(Tests)].
+	Tests0 = ct_helper:all(?MODULE),
+	Tests = [T || T <- Tests0, T =/= fail_gracefully_on_disconnect],
+	ProxyTests = [fail_gracefully_on_disconnect],
+	[{proxy_tests, [parallel], ProxyTests},
+	 {h2c_upgrade, [parallel], Tests} | cowboy_test:common_groups(Tests)].
 
 init_per_group(Name=http, Config) ->
 	cowboy_test:init_http(Name, #{
@@ -70,6 +74,23 @@ init_dispatch() ->
 	]}]).
 
 %% Tests.
+
+fail_gracefully_on_disconnect(Config) ->
+	doc("Probing a port does not generate a crash"),
+	{ok, Socket} = gen_tcp:connect("localhost", config(port, Config),
+		[binary, {active, false}, {packet, raw}]),
+	timer:sleep(100),
+	Pid = ct_helper:get_remote_pid_tcp(Socket),
+	Ref = erlang:monitor(process, Pid),
+	gen_tcp:close(Socket),
+	receive
+		{'DOWN', Ref, process, Pid, {shutdown, closed}} ->
+			ok;
+		{'DOWN', Ref, process, Pid, Reason} ->
+			error(Reason)
+	after 500 ->
+			error(timeout)
+	end.
 
 v1_proxy_header(Config) ->
 	doc("Confirm we can read the proxy header at the start of the connection."),
